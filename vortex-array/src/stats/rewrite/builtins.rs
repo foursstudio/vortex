@@ -819,6 +819,7 @@ mod tests {
     use std::sync::atomic::AtomicUsize;
     use std::sync::atomic::Ordering;
 
+    use rstest::rstest;
     use vortex_error::VortexResult;
     use vortex_session::VortexSession;
 
@@ -1077,6 +1078,36 @@ mod tests {
                 ),
                 all_null(&col("a")),
             ))
+        );
+        Ok(())
+    }
+
+    /// `optimize_recursive` must keep `is_null`/`is_not_null` predicates in a form the stats
+    /// rewrites recognize, otherwise scan pruning silently stops working.
+    #[rstest]
+    #[case::is_null_cast(is_null(cast(
+        col("a"),
+        DType::Primitive(PType::I64, Nullability::Nullable)
+    )))]
+    #[case::is_not_null_cast(is_not_null(cast(
+        col("a"),
+        DType::Primitive(PType::I64, Nullability::Nullable)
+    )))]
+    #[case::is_null_strict(is_null(gt(col("a"), lit(5i32))))]
+    #[case::is_not_null_strict(is_not_null(gt(col("a"), lit(5i32))))]
+    fn null_predicates_prune_after_optimize(#[case] expr: Expression) -> VortexResult<()> {
+        let scope = DType::Struct(
+            StructFields::from_iter([("a", DType::Primitive(PType::I32, Nullability::Nullable))]),
+            Nullability::NonNullable,
+        );
+        let optimized = expr.bind(&scope)?.optimize_recursive()?;
+        assert!(
+            optimized.falsify(&SESSION)?.is_some(),
+            "no falsifier for optimized predicate {optimized}"
+        );
+        assert!(
+            optimized.satisfy(&SESSION)?.is_some(),
+            "no satisfier for optimized predicate {optimized}"
         );
         Ok(())
     }
