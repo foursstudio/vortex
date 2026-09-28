@@ -35,7 +35,7 @@ use crate::scalar_fn::typed::TypedScalarFnInstance;
 /// A type-erased scalar function, pairing a vtable with bound options behind a trait object.
 ///
 /// This stores a [`ScalarFnVTable`] and its options behind an `Arc<dyn DynScalarFn>`, allowing
-/// heterogeneous storage inside [`Expression`] and [`crate::arrays::ScalarFnArray`].
+/// heterogeneous storage inside [`crate::arrays::ScalarFnArray`].
 ///
 /// Use [`super::TypedScalarFnInstance::new()`] to construct, and [`super::TypedScalarFnInstance::erased()`] to
 /// obtain a [`ScalarFnRef`].
