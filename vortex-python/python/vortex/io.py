@@ -11,12 +11,12 @@ class ReadAt(Protocol):
     """
     A positional byte source that Vortex reads from, for storage only reachable from Python.
 
-    Pass one to :func:`vortex.open`. Binary file objects (``open(path, "rb")``, :class:`io.BytesIO`,
+    Pass one to :func:`vortex.open_readable`. Binary file objects (``open(path, "rb")``, :class:`io.BytesIO`,
     fsspec and pyarrow files) are accepted too without implementing this protocol, but their reads
     are serialized because each one has to ``seek`` first. Implement :class:`ReadAt` when the
     underlying storage supports positional reads, such as :func:`os.pread` or HTTP range requests,
     so that Vortex can issue many reads at once: up to 192 by default, set with the ``concurrency``
-    argument of :func:`vortex.open`.
+    argument of :func:`vortex.open_readable`.
 
     Reads are called from Vortex worker threads, potentially many concurrently, so implementations
     must be safe for concurrent use. Releasing the GIL while waiting on IO lets those reads overlap.
@@ -35,7 +35,7 @@ class ReadAt(Protocol):
     ...
     ...     def read_into(self, offset: int, buffer: memoryview) -> int:
     ...         return os.preadv(self._fd, [buffer], offset)
-    >>> vxf = vx.open(PReadFile("data.vortex"))  # doctest: +SKIP
+    >>> vxf = vx.open_readable(PReadFile("data.vortex"))  # doctest: +SKIP
     """
 
     def size(self) -> int:

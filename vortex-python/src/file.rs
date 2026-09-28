@@ -9,7 +9,6 @@ use pyo3::exceptions::PyTypeError;
 use pyo3::intern;
 use pyo3::prelude::*;
 use pyo3::types::PyList;
-use pyo3::types::PyString;
 use vortex::array::ArrayRef;
 use vortex::array::ExecutionCtx;
 use vortex::array::VortexSessionExecute;
@@ -25,6 +24,7 @@ use vortex::expr::root;
 use vortex::expr::select;
 use vortex::file::OpenOptionsSessionExt;
 use vortex::file::VortexFile;
+use vortex::file::VortexOpenOptions;
 use vortex::io::VortexReadAt;
 use vortex::io::runtime::BlockingRuntime;
 use vortex::io::session::RuntimeSessionExt;
@@ -57,6 +57,7 @@ pub(crate) fn init(py: Python, parent: &Bound<PyModule>) -> PyResult<()> {
     install_module("vortex._lib.file", &m)?;
 
     m.add_function(wrap_pyfunction!(open, &m)?)?;
+    m.add_function(wrap_pyfunction!(open_readable, &m)?)?;
     m.add_function(wrap_pyfunction!(_reopen, &m)?)?;
     m.add_class::<PyVortexFile>()?;
 
@@ -66,82 +67,29 @@ pub(crate) fn init(py: Python, parent: &Bound<PyModule>) -> PyResult<()> {
 /// Reopen a Vortex file by path. The unpickling half of [`PyVortexFile::__reduce__`].
 #[pyfunction]
 fn _reopen(py: Python, path: &str, without_segment_cache: bool) -> PyVortexResult<PyVortexFile> {
-    let path = PyString::new(py, path);
-    open(py, path.as_any(), None, without_segment_cache, None)
+    open(py, path, None, without_segment_cache)
 }
 
 /// Open a Vortex file for reading.
 ///
-/// `source` is a path or URL, an `os.PathLike`, or a Python object that performs the IO itself
-/// (see [`PyReadable`]). Callers can optionally configure an object store for a path using one of
-/// the definitions in the `vortex.store` module.
+/// Callers can optionally configure an object store to build from using one of the definitions
+/// in the `vortex.store` crate.
 #[pyfunction]
-#[pyo3(signature = (source, *, store = None, without_segment_cache = false, concurrency = None))]
+#[pyo3(signature = (path, *, store = None, without_segment_cache = false))]
 pub fn open(
     py: Python,
-    source: &Bound<PyAny>,
+    path: &str,
     store: Option<AnyVortexStore>,
     without_segment_cache: bool,
-    concurrency: Option<usize>,
 ) -> PyVortexResult<PyVortexFile> {
-    let path = if let Ok(path) = source.cast::<PyString>() {
-        Some(path.to_str()?.to_string())
-    } else if source.hasattr(intern!(py, "__fspath__"))? {
-        Some(
-            PyModule::import(py, intern!(py, "os"))?
-                .call_method1(intern!(py, "fspath"), (source,))?
-                .extract::<String>()?,
-        )
+    let origin = if store.is_some() {
+        Origin::Store
     } else {
-        None
+        Origin::Path
     };
-
-    let origin = match (&path, &store) {
-        (Some(_), None) => Origin::Path,
-        (Some(_), Some(_)) => Origin::Store,
-        (None, None) => Origin::Readable,
-        (None, Some(_)) => {
-            return Err(PyTypeError::new_err(
-                "`store` can only be combined with a path or URL, not a Python readable",
-            )
-            .into());
-        }
-    };
-
-    let (readable, owned_path) = match &path {
-        Some(_) if concurrency.is_some() => {
-            return Err(PyTypeError::new_err(
-                "`concurrency` applies to a vortex.io.ReadAt reader, not a path or URL",
-            )
-            .into());
-        }
-        Some(path) => (None, path.clone()),
-        None => {
-            let readable = Arc::new(PyReadable::try_new(
-                source,
-                session().handle(),
-                concurrency,
-            )?);
-            let name = readable
-                .uri()
-                .map(|uri| uri.to_string())
-                .unwrap_or_default();
-            (Some(readable), name)
-        }
-    };
-
-    let vxf = py.detach(move || {
-        current_runtime().block_on(async move {
-            let mut options = session().open_options();
-            if !without_segment_cache {
-                // TODO(ngates): use a globally shared segment cache for all files
-                options = options.with_segment_cache(Arc::new(MokaSegmentCache::new(256 << 20)));
-            }
-
-            if let Some(readable) = readable {
-                return options.open(readable).await;
-            }
-            let path = path.as_deref().unwrap_or_default();
+    let vxf = py.detach(|| {
+        current_runtime().block_on(async {
+            let options = open_options(without_segment_cache);
             match resolve_store(path, store.map(|x| x.into_inner()))? {
                 ResolvedStore::ObjectStore(store, path) => {
                     options.open_object_store(&store, path).await
@@ -153,10 +101,50 @@ pub fn open(
 
     Ok(PyVortexFile {
         vxf,
-        path: owned_path,
+        path: path.to_string(),
         origin,
         without_segment_cache,
     })
+}
+
+/// Open a Vortex file through a Python object that performs the IO itself (see [`PyReadable`]).
+#[pyfunction]
+#[pyo3(signature = (reader, *, concurrency = None, without_segment_cache = false))]
+pub fn open_readable(
+    py: Python,
+    reader: &Bound<PyAny>,
+    concurrency: Option<usize>,
+    without_segment_cache: bool,
+) -> PyVortexResult<PyVortexFile> {
+    let readable = Arc::new(PyReadable::try_new(
+        reader,
+        session().handle(),
+        concurrency,
+    )?);
+    let name = readable
+        .uri()
+        .map(|uri| uri.to_string())
+        .unwrap_or_default();
+    let vxf = py.detach(|| {
+        current_runtime().block_on(open_options(without_segment_cache).open(readable))
+    })?;
+
+    Ok(PyVortexFile {
+        vxf,
+        path: name,
+        origin: Origin::Readable,
+        without_segment_cache,
+    })
+}
+
+fn open_options(without_segment_cache: bool) -> VortexOpenOptions {
+    let options = session().open_options();
+    if without_segment_cache {
+        options
+    } else {
+        // TODO(ngates): use a globally shared segment cache for all files
+        options.with_segment_cache(Arc::new(MokaSegmentCache::new(256 << 20)))
+    }
 }
 
 /// Where a [`PyVortexFile`] was opened from, which decides whether it can be pickled.

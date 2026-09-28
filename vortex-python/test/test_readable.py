@@ -7,6 +7,7 @@ import pickle
 import threading
 import time
 from pathlib import Path
+from typing import IO
 
 import pyarrow as pa
 import pytest
@@ -33,8 +34,8 @@ def expected(path: Path) -> pa.Table:
     return vx.open(str(path)).to_arrow().read_all()
 
 
-def read_all(source: object) -> pa.Table:
-    return vx.open(source, without_segment_cache=True).to_arrow().read_all()  # ty: ignore[invalid-argument-type]
+def read_all(source: ReadAt | IO[bytes]) -> pa.Table:
+    return vx.open_readable(source, without_segment_cache=True).to_arrow().read_all()
 
 
 class PReadFile:
@@ -77,10 +78,6 @@ def test_bytes_io(path: Path, expected: pa.Table) -> None:
     assert read_all(io.BytesIO(path.read_bytes())).equals(expected)
 
 
-def test_pathlike(path: Path, expected: pa.Table) -> None:
-    assert read_all(path).equals(expected)
-
-
 def test_read_only_file_object(path: Path, expected: pa.Table) -> None:
     class ReadOnly:
         def __init__(self, data: bytes) -> None:
@@ -93,14 +90,15 @@ def test_read_only_file_object(path: Path, expected: pa.Table) -> None:
             # Return at most 1000 bytes to exercise the short-read loop.
             return self._inner.read(min(n, 1000))
 
-    assert read_all(ReadOnly(path.read_bytes())).equals(expected)
+    # A deliberately minimal file object: only `seek` and `read`, which is not a full `IO[bytes]`.
+    assert read_all(ReadOnly(path.read_bytes())).equals(expected)  # ty: ignore[invalid-argument-type]
 
 
 def test_read_at(path: Path, expected: pa.Table) -> None:
     reader = PReadFile(path)
     try:
         assert isinstance(reader, ReadAt)
-        vxf = vx.open(reader, without_segment_cache=True)
+        vxf = vx.open_readable(reader, without_segment_cache=True)
         assert len(vxf) == expected.num_rows
         filtered = vxf.to_arrow(["index"], expr=vx.expr.column("index") < 10).read_all()
         assert filtered == pa.table({"index": pa.array(range(10), pa.int64())})
@@ -188,19 +186,12 @@ def test_retained_buffer_is_an_error(path: Path) -> None:
 
 def test_not_readable() -> None:
     with pytest.raises(TypeError, match="binary file object"):
-        vx.open(object())  # ty: ignore[invalid-argument-type]
-
-
-def test_store_with_readable_is_an_error(path: Path) -> None:
-    from vortex.store import LocalStore
-
-    with open(path, "rb") as f, pytest.raises(TypeError, match="store"):
-        vx.open(f, store=LocalStore())
+        vx.open_readable(object())  # ty: ignore[invalid-argument-type]
 
 
 def test_pickle_is_refused(path: Path) -> None:
     with open(path, "rb") as f:
-        vxf = vx.open(f)
+        vxf = vx.open_readable(f)
         assert vxf.path == str(path)
         with pytest.raises(TypeError, match="Python readable"):
             pickle.dumps(vxf)
@@ -215,7 +206,7 @@ def test_read_at_concurrency_limit(path: Path, concurrency: int) -> None:
 
     reader = Slow(path)
     try:
-        vxf = vx.open(reader, without_segment_cache=True, concurrency=concurrency)
+        vxf = vx.open_readable(reader, without_segment_cache=True, concurrency=concurrency)
         vxf.to_arrow().read_all()
         assert 0 < reader.max_in_flight <= concurrency
     finally:
@@ -224,9 +215,4 @@ def test_read_at_concurrency_limit(path: Path, concurrency: int) -> None:
 
 def test_concurrency_rejected_for_file_object(path: Path) -> None:
     with open(path, "rb") as f, pytest.raises(TypeError, match="serialized"):
-        vx.open(f, concurrency=4)
-
-
-def test_concurrency_rejected_for_path(path: Path) -> None:
-    with pytest.raises(TypeError, match="concurrency"):
-        vx.open(str(path), concurrency=4)
+        vx.open_readable(f, concurrency=4)

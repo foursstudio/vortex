@@ -3,7 +3,6 @@
 
 from __future__ import annotations
 
-import os
 from collections.abc import Iterator
 from typing import IO, TYPE_CHECKING, final
 
@@ -34,30 +33,23 @@ if TYPE_CHECKING:
 
 
 def open(
-    path: str | os.PathLike[str] | IO[bytes] | ReadAt,
+    path: str,
     *,
     store: AzureStore | CosStore | GCSStore | HfStore | HTTPStore | LocalStore | MemoryStore | S3Store | None = None,
     without_segment_cache: bool = False,
-    concurrency: int | None = None,
 ) -> VortexFile:
     """
-    Lazily open a Vortex file located at the given path or URL, or read through a Python object.
+    Lazily open a Vortex file located at the given path or URL.
 
     Parameters
     ----------
-    path : :class:`str` | :class:`os.PathLike` | binary file object | :class:`vortex.io.ReadAt`
-        A local path or URL to the Vortex file, or a Python object that performs the IO itself:
-        either a binary file object with ``seek`` and ``readinto`` (or ``read``), or an object
-        implementing :class:`vortex.io.ReadAt`. Vortex does not close a passed-in object; keep it
-        open for as long as the returned file, or anything scanned from it, is in use.
+    path : :class:`str`
+        A local path or URL to the Vortex file.
     store :
-        An object store created from the `vortex.store` package, for a path or URL only. By default
+        An object store created from the `vortex.store` package. By default
         the store is inferred based on the path
     without_segment_cache : :class:`bool`
         If true, disable the segment cache for this file, useful when memory is constrained.
-    concurrency : :class:`int` | None
-        The most reads to have in flight at once through a :class:`vortex.io.ReadAt` reader,
-        192 by default. Not accepted for paths or file objects, whose reads are serialized.
 
     Examples
     --------
@@ -67,18 +59,49 @@ def open(
     >>> vxf = vx.open("data.vortex") # doctest: +SKIP
     >>> array_iterator = vxf.scan() # doctest: +SKIP
 
-    Open a Vortex file through a Python file object, such as one from fsspec:
-
-    >>> import fsspec # doctest: +SKIP
-    >>> with fsspec.open("memory://data.vortex", "rb") as f: # doctest: +SKIP
-    ...     table = vx.open(f).to_arrow().read_all()
-
-    See also: :class:`vortex.dataset.VortexDataset`
+    See also: :func:`vortex.open_readable`, :class:`vortex.dataset.VortexDataset`
     """
 
-    return VortexFile(
-        _file.open(path, store=store, without_segment_cache=without_segment_cache, concurrency=concurrency)
-    )
+    return VortexFile(_file.open(path, store=store, without_segment_cache=without_segment_cache))
+
+
+def open_readable(
+    reader: ReadAt | IO[bytes],
+    *,
+    concurrency: int | None = None,
+    without_segment_cache: bool = False,
+) -> VortexFile:
+    """
+    Lazily open a Vortex file through a Python object that performs the IO itself.
+
+    Use this for storage only reachable from Python. Storage with a native object store should be
+    opened with :func:`vortex.open` instead, which does its IO without taking the GIL.
+
+    Parameters
+    ----------
+    reader : :class:`vortex.io.ReadAt` | binary file object
+        Either an object implementing :class:`vortex.io.ReadAt`, or a binary file object with
+        ``seek`` and ``readinto`` (or ``read``), such as ``open(path, "rb")``, :class:`io.BytesIO`
+        or an fsspec file. Vortex does not close it; keep it open for as long as the returned file,
+        or anything scanned from it, is in use.
+    concurrency : :class:`int` | None
+        The most reads to have in flight at once through a :class:`vortex.io.ReadAt`, 192 by
+        default. Not accepted for a file object, whose reads are serialized because each one has to
+        ``seek`` first.
+    without_segment_cache : :class:`bool`
+        If true, disable the segment cache for this file, useful when memory is constrained.
+
+    Examples
+    --------
+    Open a Vortex file through an fsspec file object:
+
+    >>> import fsspec # doctest: +SKIP
+    >>> import vortex as vx
+    >>> with fsspec.open("memory://data.vortex", "rb") as f: # doctest: +SKIP
+    ...     table = vx.open_readable(f).to_arrow().read_all()
+    """
+
+    return VortexFile(_file.open_readable(reader, concurrency=concurrency, without_segment_cache=without_segment_cache))
 
 
 @final

@@ -8,6 +8,8 @@ HTTP, S3, Google Cloud Storage, and Azure Blob Storage.
    :nosignatures:
 
    ~vortex.open
+   ~vortex.open_readable
+   ~vortex.io.ReadAt
    ~vortex.VortexFile
    ~vortex.RepeatedScan
    ~vortex.io.read_url
@@ -18,6 +20,11 @@ HTTP, S3, Google Cloud Storage, and Azure Blob Storage.
    <hr>
 
 .. autofunction:: vortex.open
+
+.. autofunction:: vortex.open_readable
+
+.. autoclass:: vortex.io.ReadAt
+   :members:
 
 .. autoclass:: vortex.VortexFile
    :members:

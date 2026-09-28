@@ -148,8 +148,8 @@ fn not_readable(obj: &Bound<'_, PyAny>) -> PyErr {
         .map(|n| n.to_string())
         .unwrap_or_else(|_| "<unknown>".to_string());
     PyTypeError::new_err(format!(
-        "expected a path, a binary file object with `seek` and `readinto` (or `read`), or an \
-         object with `size()` and `read_into(offset, buffer)`; got {type_name}"
+        "expected a vortex.io.ReadAt (`size()` and `read_into(offset, buffer)`) or a binary file \
+         object with `seek` and `readinto` (or `read`); got {type_name}"
     ))
 }
 
